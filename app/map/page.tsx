@@ -40,101 +40,96 @@ function DrawingTools() {
   };
 
   const generateRandomMarkers = async () => {
-    if (!map || shapes.length === 0) return;
+  if (!map || shapes.length === 0) return;
 
-    if (markerClusterer) {
-      markerClusterer.clearMarkers();
+  if (markerClusterer) {
+    markerClusterer.clearMarkers();
+  }
+
+  const { AdvancedMarkerElement } = (await google.maps.importLibrary(
+    'marker',
+  )) as google.maps.MarkerLibrary;
+
+  const newMarkers: google.maps.marker.AdvancedMarkerElement[] = [];
+
+  // take only the first shape for now
+  for( const shape of shapes ){
+  let endpoint = "";
+  let payload: any = {};
+
+  if (shape instanceof google.maps.Rectangle) {
+    const bounds = shape.getBounds();
+    if (bounds) {
+      const ne = bounds.getNorthEast();
+      const sw = bounds.getSouthWest();
+      payload = { ne: [ne.lat(), ne.lng()], sw: [sw.lat(), sw.lng()] };
+      endpoint = "rectangle";
     }
-
-    const { AdvancedMarkerElement } = (await google.maps.importLibrary(
-      'marker',
-    )) as google.maps.MarkerLibrary;
-
-    const newMarkers: google.maps.marker.AdvancedMarkerElement[] = [];
-
-    for (let i = 0; i < 100; i++) {
-      const randomShape = shapes[Math.floor(Math.random() * shapes.length)];
-      let randomPoint: google.maps.LatLng | null = null;
-
-      if (randomShape instanceof google.maps.Rectangle) {
-        const bounds = randomShape.getBounds();
-        if (bounds) {
-          const sw = bounds.getSouthWest();
-          const ne = bounds.getNorthEast();
-          const lng = Math.random() * (ne.lng() - sw.lng()) + sw.lng();
-          const lat = Math.random() * (ne.lat() - sw.lat()) + sw.lat();
-          randomPoint = new google.maps.LatLng(lat, lng);
-        }
-      } else if (randomShape instanceof google.maps.Circle) {
-        const center = randomShape.getCenter();
-        const radius = randomShape.getRadius();
-        if (center) {
-          const r = radius * Math.sqrt(Math.random());
-          const theta = Math.random() * 2 * Math.PI;
-          const x = center.lng() + (r / 111320) * Math.cos(theta);
-          const y = center.lat() + (r / 111320) * Math.sin(theta);
-          randomPoint = new google.maps.LatLng(y, x);
-        }
-      } else if (randomShape instanceof google.maps.Polygon) {
-        const bounds = new google.maps.LatLngBounds();
-        const path = randomShape.getPath();
-        for (let j = 0; j < path.getLength(); j++) {
-          bounds.extend(path.getAt(j));
-        }
-        const sw = bounds.getSouthWest();
-        const ne = bounds.getNorthEast();
-
-        for (let k = 0; k < 10; k++) {
-          const lng = Math.random() * (ne.lng() - sw.lng()) + sw.lng();
-          const lat = Math.random() * (ne.lat() - sw.lat()) + sw.lat();
-          const point = new google.maps.LatLng(lat, lng);
-          if (isPointInShape(point, randomShape)) {
-            randomPoint = point;
-            break;
-          }
-        }
-      }
-
-      if (randomPoint) {
-        const img = document.createElement('img');
-        img.src = '/plant-animation/1.png';
-        img.width = 48;
-        img.height = 48;
-
-        const marker = new AdvancedMarkerElement({
-          position: randomPoint,
-          content: img,
-        });
-
-        marker.addListener('click', () => {
-          if (selectedMarker) {
-            (selectedMarker.content as HTMLElement).style.border = '';
-          }
-          (marker.content as HTMLElement).style.border = '2px solid #FFFF00'; // Highlight color
-          setSelectedMarker(marker);
-          if (marker.position) {
-            const literal = marker.position as google.maps.LatLngLiteral;
-            setMarkerInfo(`Marker Position: ${literal.lat.toFixed(6)}, ${literal.lng.toFixed(6)}`);
-          }
-        });
-
-        newMarkers.push(marker);
-      }
+  } else if (shape instanceof google.maps.Circle) {
+    const center = shape.getCenter();
+    const radius = shape.getRadius();
+    if (center) {
+      payload = { center: [center.lat(), center.lng()], radius };
+      endpoint = "circle";
     }
-    
-    setMarkers(newMarkers);
-    const clusterer = new MarkerClusterer({ markers: newMarkers, map });
-    setMarkerClusterer(clusterer);
+  } else if (shape instanceof google.maps.Polygon) {
+    const path = shape.getPath();
+    const points: [number, number][] = [];
+    for (let i = 0; i < path.getLength(); i++) {
+      const p = path.getAt(i);
+      points.push([p.lat(), p.lng()]);
+    }
+    payload = { points };
+    endpoint = "polygon";
+  }
+  
+  if (!endpoint) return;
 
-    // Make shapes transparent but keep borders
-    shapes.forEach(shape => {
-      (shape as any).setOptions({ 
-        fillOpacity: 0.0,
-        strokeOpacity: 1.0
-      });
+  // Call backend
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_API_URL}/random-points/${endpoint}?count=100`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  const data = await res.json();
+
+  // Place returned points as markers
+  for (const [lat, lng] of data.points) {
+    const img = document.createElement("img");
+    img.src = "/plant-animation/1.png";
+    img.width = 48;
+    img.height = 48;
+
+    const marker = new AdvancedMarkerElement({
+      position: { lat, lng },
+      content: img,
     });
-  };
 
+    marker.addListener("click", () => {
+      if (selectedMarker) {
+        (selectedMarker.content as HTMLElement).style.border = "";
+      }
+      (marker.content as HTMLElement).style.border = "2px solid #FFFF00";
+      setSelectedMarker(marker);
+      setMarkerInfo(`Marker Position: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+    });
+
+    newMarkers.push(marker);
+  }
+  }
+  setMarkers(newMarkers);
+  const clusterer = new MarkerClusterer({ markers: newMarkers, map });
+  setMarkerClusterer(clusterer);
+
+  // Keep shape borders but make them transparent
+  shapes.forEach(shape => {
+    (shape as any).setOptions({ fillOpacity: 0.0, strokeOpacity: 1.0 });
+  });
+};
   const updateCoordinates = (shape: google.maps.MVCObject) => {
     let coordsText = '';
     
@@ -377,9 +372,10 @@ function DrawingTools() {
 export default function MapPage() {
   const position = { lat: 22.5726, lng: 88.3639 };
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+  const mapid = process.env.NEXT_PUBLIC_MAP_ID
   
 
-  if (!apiKey) {
+  if (!apiKey || !mapid) {
     return <div>Error: API Key or Map ID is missing. Check your .env.local file and ensure NEXT_PUBLIC_MAP_ID is set.</div>;
   }
 
@@ -394,6 +390,7 @@ export default function MapPage() {
           defaultTilt={0}
           defaultHeading={0}
           gestureHandling="greedy"
+          mapId={mapid}
           restriction={{
             latLngBounds: {
               north: 85, south: -85, west: -179, east: 179
